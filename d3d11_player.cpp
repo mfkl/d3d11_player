@@ -10,6 +10,7 @@
    entire area instead of drawing in a texture.
 */
 
+#include <synchapi.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -521,12 +522,13 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 
     if(message == WM_EXITSIZEMOVE)
     {
-        printf("WM_EXITSIZEMOVE \n");
-        printf("STOPPING AND RESTARTING PLAYBACK \n");
-        libvlc_media_player_stop_async( ctx->p_mp );
+        libvlc_media_player_stop_async(ctx->p_mp);
 
+        Sleep(2000);
 
-        libvlc_media_player_play( ctx->p_mp );
+        libvlc_media_player_play(ctx->p_mp);
+        // libvlc_time_t time = libvlc_media_player_get_time(ctx->p_mp);
+        // libvlc_media_player_set_time(ctx->p_mp, time + 500, false);
     }
 
     switch(message)
@@ -575,6 +577,8 @@ int WINAPI WinMain(HINSTANCE hInstance,
 
     p_libvlc = libvlc_new( 0, NULL );
     p_media = libvlc_media_new_location( p_libvlc, "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" );
+    // libvlc_media_add_option(p_media, ":avcodec-hw=none");
+
     free( file_path );
     Context.p_mp = libvlc_media_player_new_from_media( p_media );
 
