@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
+#include <assert.h>
 
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
@@ -31,9 +32,13 @@
 #define BORDER_TOP     ( 0.95f)
 #define BORDER_BOTTOM  (-0.90f)
 
+#define check_leak(x)  assert(x)
+
 struct render_context
 {
     HWND hWnd;
+
+    libvlc_media_player_t *p_mp;
 
     /* resources shared by VLC */
     ID3D11Device            *d3deviceVLC;
@@ -42,7 +47,7 @@ struct render_context
     struct {
         ID3D11Texture2D         *textureVLC; // shared between VLC and the app
         ID3D11RenderTargetView  *textureRenderTarget;
-        HANDLE                  sharedHandled; // handle of the texture used by VLC and the app
+        HANDLE                  sharedHandle; // handle of the texture used by VLC and the app
 
         /* texture VLC renders into */
         ID3D11Texture2D          *texture;
@@ -118,6 +123,10 @@ struct SHADER_INPUT {
         FLOAT y;
     } texture;
 };
+
+struct render_context Context = { };
+libvlc_media_t *p_media;
+libvlc_instance_t *p_libvlc;
 
 static void init_direct3d(struct render_context *ctx)
 {
@@ -274,29 +283,34 @@ static void init_direct3d(struct render_context *ctx)
 
 static void release_textures(struct render_context *ctx)
 {
-    if (ctx->resized.sharedHandled)
+    ULONG ref;
+    if (ctx->resized.sharedHandle)
     {
-        CloseHandle(ctx->resized.sharedHandled);
-        ctx->resized.sharedHandled = NULL;
+        CloseHandle(ctx->resized.sharedHandle);
+        ctx->resized.sharedHandle = NULL;
     }
     if (ctx->resized.textureVLC)
     {
-        ctx->resized.textureVLC->Release();
+        ref = ctx->resized.textureVLC->Release();
+        check_leak(ref == 0);
         ctx->resized.textureVLC = NULL;
     }
     if (ctx->resized.textureShaderInput)
     {
-        ctx->resized.textureShaderInput->Release();
+        ref = ctx->resized.textureShaderInput->Release();
+        check_leak(ref == 0);
         ctx->resized.textureShaderInput = NULL;
     }
     if (ctx->resized.textureRenderTarget)
     {
-        ctx->resized.textureRenderTarget->Release();
+        ref = ctx->resized.textureRenderTarget->Release();
+        check_leak(ref == 0);
         ctx->resized.textureRenderTarget = NULL;
     }
     if (ctx->resized.texture)
     {
-        ctx->resized.texture->Release();
+        ref = ctx->resized.texture->Release();
+        check_leak(ref == 0);
         ctx->resized.texture = NULL;
     }
 }
@@ -325,28 +339,40 @@ static void list_dxgi_leaks(void)
 
 static void release_direct3d(struct render_context *ctx)
 {
-    ctx->d3deviceVLC->Release();
+    ULONG ref;
 
     release_textures(ctx);
 
-    ctx->d3dctxVLC->Release();
-    ctx->d3deviceVLC->Release();
+    ref = ctx->d3dctxVLC->Release();
+    check_leak(ref == 0);
+    ref = ctx->d3deviceVLC->Release();
+    check_leak(ref == 0);
 
-    ctx->samplerState->Release();
-    ctx->pShadersInputLayout->Release();
-    ctx->pVS->Release();
-    ctx->pPS->Release();
-    ctx->pIndexBuffer->Release();
-    ctx->pVertexBuffer->Release();
-    ctx->swapchain->Release();
-    ctx->swapchainRenderTarget->Release();
-    ctx->d3dctx->Release();
-    ctx->d3device->Release();
+    ref = ctx->samplerState->Release();
+    check_leak(ref == 0);
+    ref = ctx->pShadersInputLayout->Release();
+    check_leak(ref == 0);
+    ref = ctx->pVS->Release();
+    check_leak(ref == 0);
+    ref = ctx->pPS->Release();
+    check_leak(ref == 0);
+    ref = ctx->pIndexBuffer->Release();
+    check_leak(ref == 0);
+    ref = ctx->pVertexBuffer->Release();
+    check_leak(ref == 0);
+    ref = ctx->swapchain->Release();
+    check_leak(ref == 0);
+    ref = ctx->swapchainRenderTarget->Release();
+    check_leak(ref == 0);
+    ref = ctx->d3dctx->Release();
+    check_leak(ref == 0);
+    ref = ctx->d3device->Release();
+    check_leak(ref == 0);
 
     list_dxgi_leaks();
 }
 
-static bool UpdateOutput_cb( void *opaque, const libvlc_video_direct3d_cfg_t *cfg, libvlc_video_output_cfg_t *out )
+static bool UpdateOutput_cb( void *opaque, const libvlc_video_render_cfg_t *cfg, libvlc_video_output_cfg_t *out )
 {
     struct render_context *ctx = static_cast<struct render_context *>( opaque );
 
@@ -360,7 +386,6 @@ static bool UpdateOutput_cb( void *opaque, const libvlc_video_direct3d_cfg_t *cf
     D3D11_TEXTURE2D_DESC texDesc = { };
     texDesc.MipLevels = 1;
     texDesc.SampleDesc.Count = 1;
-    texDesc.MiscFlags = 0;
     texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     texDesc.Usage = D3D11_USAGE_DEFAULT;
     texDesc.CPUAccessFlags = 0;
@@ -375,12 +400,12 @@ static bool UpdateOutput_cb( void *opaque, const libvlc_video_direct3d_cfg_t *cf
 
     IDXGIResource1* sharedResource = NULL;
     ctx->resized.texture->QueryInterface(__uuidof(IDXGIResource1), (LPVOID*) &sharedResource);
-    hr = sharedResource->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE, NULL, &ctx->resized.sharedHandled);
+    hr = sharedResource->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE, NULL, &ctx->resized.sharedHandle);
     sharedResource->Release();
 
     ID3D11Device1* d3d11VLC1;
     ctx->d3deviceVLC->QueryInterface(__uuidof(ID3D11Device1), (LPVOID*) &d3d11VLC1);
-    hr = d3d11VLC1->OpenSharedResource1(ctx->resized.sharedHandled, __uuidof(ID3D11Texture2D), (void**)&ctx->resized.textureVLC);
+    hr = d3d11VLC1->OpenSharedResource1(ctx->resized.sharedHandle, __uuidof(ID3D11Texture2D), (void**)&ctx->resized.textureVLC);
     d3d11VLC1->Release();
 
     D3D11_SHADER_RESOURCE_VIEW_DESC resviewDesc;
@@ -402,7 +427,7 @@ static bool UpdateOutput_cb( void *opaque, const libvlc_video_direct3d_cfg_t *cf
 
     ctx->d3dctxVLC->OMSetRenderTargets( 1, &ctx->resized.textureRenderTarget, NULL );
 
-    out->surface_format = renderFormat;
+    out->dxgi_format    = renderFormat;
     out->full_range     = true;
     out->colorspace     = libvlc_video_colorspace_BT709;
     out->primaries      = libvlc_video_primaries_BT709;
@@ -417,7 +442,7 @@ static void Swap_cb( void* opaque )
     ctx->swapchain->Present( 0, 0 );
 }
 
-static bool StartRendering_cb( void *opaque, bool enter, const libvlc_video_direct3d_hdr10_metadata_t *hdr10 )
+static bool StartRendering_cb( void *opaque, bool enter )
 {
     struct render_context *ctx = static_cast<struct render_context *>( opaque );
     if ( enter )
@@ -441,21 +466,23 @@ static bool StartRendering_cb( void *opaque, bool enter, const libvlc_video_dire
     return true;
 }
 
-static bool SelectPlane_cb( void *opaque, size_t plane )
+static bool SelectPlane_cb( void *opaque, size_t plane, void *out )
 {
+    ID3D11RenderTargetView **output = static_cast<ID3D11RenderTargetView**>( out );
     struct render_context *ctx = static_cast<struct render_context *>( opaque );
     if ( plane != 0 ) // we only support one packed RGBA plane (DXGI_FORMAT_R8G8B8A8_UNORM)
         return false;
+    // we don't really need to return it as we already do the OMSetRenderTargets().
+    *output = ctx->resized.textureRenderTarget;
     return true;
 }
 
-static bool Setup_cb( void **opaque, const libvlc_video_direct3d_device_cfg_t *cfg, libvlc_video_direct3d_device_setup_t *out )
+static bool Setup_cb( void **opaque, const libvlc_video_setup_device_cfg_t *cfg, libvlc_video_setup_device_info_t *out )
 {
     struct render_context *ctx = static_cast<struct render_context *>(*opaque);
 
-    init_direct3d(ctx);
-
-    out->device_context = ctx->d3dctxVLC;
+    out->d3d11.device_context = ctx->d3dctxVLC;
+    ctx->d3dctxVLC->AddRef();
     return true;
 }
 
@@ -463,7 +490,7 @@ static void Cleanup_cb( void *opaque )
 {
     // here we can release all things Direct3D11 for good (if playing only one file)
     struct render_context *ctx = static_cast<struct render_context *>( opaque );
-    release_direct3d(ctx);
+   // ctx->d3dctxVLC->Release();
 }
 
 static void Resize_cb( void *opaque,
@@ -483,8 +510,7 @@ static void Resize_cb( void *opaque,
     LeaveCriticalSection(&ctx->sizeLock);
 }
 
-libvlc_media_player_t *p_mp;
-
+static const char *AspectRatio = NULL;
 
 static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -496,21 +522,10 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
         return 0;
     }
 
-    
-
     LONG_PTR p_user_data = GetWindowLongPtr( hWnd, GWLP_USERDATA );
     if( p_user_data == 0 )
         return DefWindowProc(hWnd, message, wParam, lParam);
     struct render_context *ctx = (struct render_context *)p_user_data;
-
-    if(message == WM_EXITSIZEMOVE)
-    {
-        libvlc_media_player_stop_async(p_mp);
- 
-        Sleep(2000);
-
-        libvlc_media_player_play(p_mp);
-    }
 
     switch(message)
     {
@@ -529,12 +544,56 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
+
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            {
+                int key = tolower( (unsigned char)MapVirtualKey( wParam, 2 ) );
+                if (key == 'a')
+                {
+                    if (AspectRatio == NULL)
+                        AspectRatio = "16:10";
+                    else if (strcmp(AspectRatio,"16:10")==0)
+                        AspectRatio = "16:9";
+                    else if (strcmp(AspectRatio,"16:9")==0)
+                        AspectRatio = "4:3";
+                    else if (strcmp(AspectRatio,"4:3")==0)
+                        AspectRatio = "185:100";
+                    else if (strcmp(AspectRatio,"185:100")==0)
+                        AspectRatio = "221:100";
+                    else if (strcmp(AspectRatio,"221:100")==0)
+                        AspectRatio = "235:100";
+                    else if (strcmp(AspectRatio,"235:100")==0)
+                        AspectRatio = "239:100";
+                    else if (strcmp(AspectRatio,"239:100")==0)
+                        AspectRatio = "5:3";
+                    else if (strcmp(AspectRatio,"5:3")==0)
+                        AspectRatio = "5:4";
+                    else if (strcmp(AspectRatio,"5:4")==0)
+                        AspectRatio = "1:1";
+                    else if (strcmp(AspectRatio,"1:1")==0)
+                        AspectRatio = NULL;
+                    libvlc_video_set_aspect_ratio( ctx->p_mp, AspectRatio );
+                }
+                // first press 's' to make playback end quickly
+                else if (key == 's')
+                {
+                    libvlc_media_player_set_time( Context.p_mp, libvlc_media_player_get_length( Context.p_mp ) - 1000, false );
+                }
+                // then press 'n' to try to play the next media with the same current output callbacks
+                else if (key == 'n')
+                {
+                    p_media = libvlc_media_new_location( p_libvlc, "http://streams.videolan.org/samples/MPEG-4/video.mp4" );
+                    Context.p_mp = libvlc_media_player_new_from_media( p_media );
+                    libvlc_media_player_play( Context.p_mp );
+                }
+                break;
+            }
+        default: break;
     }
 
     return DefWindowProc (hWnd, message, wParam, lParam);
 }
-
-
 
 int WINAPI WinMain(HINSTANCE hInstance,
                    HINSTANCE hPrevInstance,
@@ -542,10 +601,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
                    int nCmdShow)
 {
     WNDCLASSEX wc;
-    struct render_context Context = { };
     char *file_path;
-    libvlc_instance_t *p_libvlc;
-    libvlc_media_t *p_media;
     (void)hPrevInstance;
 
     /* remove "" around the given path */
@@ -559,11 +615,11 @@ int WINAPI WinMain(HINSTANCE hInstance,
         file_path = strdup( lpCmdLine );
 
     p_libvlc = libvlc_new( 0, NULL );
-    // p_media = libvlc_media_new_path( p_libvlc, file_path );
-    free( file_path );
     p_media = libvlc_media_new_location( p_libvlc, "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" );
-    p_mp = libvlc_media_player_new_from_media( p_media );
-    
+    free( file_path );
+    Context.p_mp = libvlc_media_player_new_from_media( p_media );
+    libvlc_audio_toggle_mute(Context.p_mp);
+
     InitializeCriticalSection(&Context.sizeLock);
 
     ZeroMemory(&wc, sizeof(WNDCLASSEX));
@@ -580,7 +636,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
     RECT wr = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
     AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
 
-    Context.hWnd = CreateWindowEx(NULL,
+    Context.hWnd = CreateWindowEx(0,
                           "WindowClass",
                           "libvlc Demo app",
                           WS_OVERLAPPEDWINDOW,
@@ -594,14 +650,17 @@ int WINAPI WinMain(HINSTANCE hInstance,
 
     ShowWindow(Context.hWnd, nCmdShow);
 
+    init_direct3d(&Context);
+
     // DON'T use with callbacks libvlc_media_player_set_hwnd(p_mp, hWnd);
 
     /* Tell VLC to render into our D3D11 environment */
-    libvlc_video_direct3d_set_callbacks( p_mp, libvlc_video_direct3d_engine_d3d11,
-                                        Setup_cb, Cleanup_cb, Resize_cb, UpdateOutput_cb, Swap_cb, StartRendering_cb, SelectPlane_cb,
-                                        &Context );
+    libvlc_video_set_output_callbacks( Context.p_mp, libvlc_video_engine_d3d11,
+                                       Setup_cb, Cleanup_cb, Resize_cb, UpdateOutput_cb, Swap_cb, StartRendering_cb,
+                                       nullptr, nullptr, SelectPlane_cb,
+                                       &Context );
 
-    libvlc_media_player_play( p_mp );
+    libvlc_media_player_play( Context.p_mp );
 
     MSG msg;
 
@@ -617,10 +676,13 @@ int WINAPI WinMain(HINSTANCE hInstance,
         }
     }
 
-    libvlc_media_player_stop_async( p_mp );
+    libvlc_media_player_stop_async( Context.p_mp );
 
-    libvlc_media_player_release( p_mp );
+    libvlc_media_player_release( Context.p_mp );
     libvlc_media_release( p_media );
+
+    release_direct3d(&Context);
+
     libvlc_release( p_libvlc );
 
     DeleteCriticalSection(&Context.sizeLock);
