@@ -1,0 +1,12 @@
+# d3d11_player experiments
+
+## Building
+
+1. download latest build at https://artifacts.videolan.org/vlc/nightly-win64-llvm/
+2. extract libvlc.dll, libvlccore.dll, sdk folder and plugins folder to d3d11_player repo root
+3. run ./build.sh from linux with mingw installed will create a d3d11_player.exe
+
+## Current issue repro
+1. start .exe
+2. when the video starts, press 's'. This will seek near the end so we reach the end without waiting so much.
+3. when the last frame is displayed, press 'n'. This should start a new playback in the existing window, but instead creates a new HWND.
